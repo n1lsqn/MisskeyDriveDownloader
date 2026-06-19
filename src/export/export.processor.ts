@@ -12,7 +12,8 @@ import { StorageService } from '../storage/storage.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as _archiver from 'archiver';
-const archiver = _archiver as unknown as (
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const archiver = require('archiver') as (
   format: string,
   options?: _archiver.ArchiverOptions,
 ) => _archiver.Archiver;
