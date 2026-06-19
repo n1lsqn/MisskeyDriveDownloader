@@ -16,7 +16,7 @@ import axios from 'axios';
 
 @Controller()
 export class AppController {
-  constructor(private readonly exportService: ExportService) {}
+  constructor(private readonly exportService: ExportService) { }
 
   @Get('api/auth/login')
   login(
@@ -554,7 +554,7 @@ export class AppController {
       <div id="authScreen" class="auth-section" style="display: none;">
         <p class="subtitle" style="margin-bottom: 1.5rem;">ご利用の Misskey インスタンスの URL を入力してログインしてください。</p>
         <div class="input-group">
-          <input type="url" id="instanceInput" class="input-field" placeholder="https://misskey.io" value="https://misskey.io">
+          <input type="url" id="instanceInput" class="input-field" placeholder="https://papi.n1l.dev" value="https://papi.n1l.dev">
         </div>
         <button onclick="loginWithMisskey()" class="btn-login">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>

@@ -3,7 +3,7 @@ import { ConfigService as NestConfigService } from '@nestjs/config';
 
 @Injectable()
 export class ConfigService {
-  constructor(private readonly nestConfigService: NestConfigService) {}
+  constructor(private readonly nestConfigService: NestConfigService) { }
 
   get port(): number {
     return this.nestConfigService.get<number>('PORT', 3000);
@@ -53,7 +53,7 @@ export class ConfigService {
   get misskeyInstanceUrl(): string {
     const url = this.nestConfigService.get<string>(
       'MISSKEY_INSTANCE_URL',
-      'https://misskey.io',
+      'https://papi.n1l.dev',
     );
     // Remove trailing slash if present
     return url.replace(/\/$/, '');
