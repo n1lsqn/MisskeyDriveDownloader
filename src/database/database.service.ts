@@ -34,6 +34,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     await this.connect();
     await this.runMigration();
+    await this.resetHangingJobs();
   }
 
   async onModuleDestroy() {
@@ -197,6 +198,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async getExpiredJobs(now: string): Promise<JobRecord[]> {
     const query = `SELECT * FROM jobs WHERE expiresAt < ? AND status != 'expired'`;
     return this.all<JobRecord>(query, [now]);
+  }
+
+  async resetHangingJobs(): Promise<void> {
+    const query = `
+      UPDATE jobs
+      SET status = 'failed', error = 'Server restarted or job aborted.'
+      WHERE status IN ('queued', 'processing', 'uploading')
+    `;
+    await this.run(query);
   }
 
   async updateJobProgress(

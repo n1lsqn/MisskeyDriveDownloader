@@ -16,7 +16,7 @@ import axios from 'axios';
 
 @Controller()
 export class AppController {
-  constructor(private readonly exportService: ExportService) { }
+  constructor(private readonly exportService: ExportService) {}
 
   @Get('api/auth/login')
   login(
