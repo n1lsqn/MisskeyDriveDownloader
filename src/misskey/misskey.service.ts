@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
-import { ConfigService } from '../config/config.service';
 
 export interface MisskeyFolder {
   id: string;
@@ -20,16 +19,6 @@ export interface MisskeyFile {
 export class MisskeyService {
   private readonly logger = new Logger(MisskeyService.name);
 
-  constructor(private readonly configService: ConfigService) {}
-
-  private get instanceUrl(): string {
-    return this.configService.misskeyInstanceUrl;
-  }
-
-  private get apiToken(): string {
-    return this.configService.misskeyApiToken;
-  }
-
   private sanitizeName(name: string): string {
     // Replace invalid filesystem characters: / \ ? % * : | " < > and control chars
     // eslint-disable-next-line no-control-regex, no-useless-escape
@@ -37,12 +26,15 @@ export class MisskeyService {
   }
 
   private async postRequest<T>(
+    instanceUrl: string,
+    token: string,
     endpoint: string,
     data: Record<string, unknown> = {},
   ): Promise<T> {
-    const url = `${this.instanceUrl}${endpoint}`;
+    const formattedUrl = instanceUrl.replace(/\/$/, '');
+    const url = `${formattedUrl}${endpoint}`;
     const payload = {
-      i: this.apiToken,
+      i: token,
       ...data,
     };
 
@@ -68,21 +60,43 @@ export class MisskeyService {
     }
   }
 
-  async testConnection(): Promise<boolean> {
+  async testConnection(instanceUrl: string, token: string): Promise<boolean> {
     try {
       // Endpoint /api/i returns user information
-      await this.postRequest('/api/i');
+      await this.postRequest<{ username: string }>(
+        instanceUrl,
+        token,
+        '/api/i',
+      );
       return true;
     } catch {
-      this.logger.warn(
-        `Failed to connect to Misskey instance: ${this.instanceUrl}`,
-      );
+      this.logger.warn(`Failed to connect to Misskey instance: ${instanceUrl}`);
       return false;
     }
   }
 
-  async getFolders(): Promise<MisskeyFolder[]> {
-    this.logger.log('Fetching all folders from Misskey Drive...');
+  async getUserInfo(
+    instanceUrl: string,
+    token: string,
+  ): Promise<{ username: string; name: string | null } | null> {
+    try {
+      const data = await this.postRequest<{
+        username: string;
+        name: string | null;
+      }>(instanceUrl, token, '/api/i');
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async getFolders(
+    instanceUrl: string,
+    token: string,
+  ): Promise<MisskeyFolder[]> {
+    this.logger.log(
+      `Fetching all folders from Misskey Drive on ${instanceUrl}...`,
+    );
     const folders: MisskeyFolder[] = [];
     let untilId: string | undefined;
 
@@ -94,6 +108,8 @@ export class MisskeyService {
       }
 
       const pageFolders = await this.postRequest<MisskeyFolder[]>(
+        instanceUrl,
+        token,
         '/api/drive/folders',
         data,
       );
@@ -113,8 +129,10 @@ export class MisskeyService {
     return folders;
   }
 
-  async getFiles(): Promise<MisskeyFile[]> {
-    this.logger.log('Fetching all files from Misskey Drive...');
+  async getFiles(instanceUrl: string, token: string): Promise<MisskeyFile[]> {
+    this.logger.log(
+      `Fetching all files from Misskey Drive on ${instanceUrl}...`,
+    );
     const files: MisskeyFile[] = [];
     let untilId: string | undefined;
 
@@ -126,6 +144,8 @@ export class MisskeyService {
       }
 
       const pageFiles = await this.postRequest<MisskeyFile[]>(
+        instanceUrl,
+        token,
         '/api/drive/files',
         data,
       );
@@ -145,8 +165,11 @@ export class MisskeyService {
     return files;
   }
 
-  async buildFolderPathMap(): Promise<Map<string, string>> {
-    const folders = await this.getFolders();
+  async buildFolderPathMap(
+    instanceUrl: string,
+    token: string,
+  ): Promise<Map<string, string>> {
+    const folders = await this.getFolders(instanceUrl, token);
     const folderMap = new Map<string, MisskeyFolder>();
     for (const f of folders) {
       folderMap.set(f.id, f);

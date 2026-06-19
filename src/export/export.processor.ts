@@ -21,6 +21,9 @@ import { Readable } from 'stream';
 
 interface ExportJobData {
   jobId: string;
+  instanceUrl: string;
+  token: string;
+  username: string;
 }
 
 @Injectable()
@@ -46,7 +49,7 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
           host: this.configService.redisHost,
           port: this.configService.redisPort,
         },
-        concurrency: 1, // Single job at a time to reduce server load
+        concurrency: 1,
       },
     );
 
@@ -64,10 +67,11 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processExport(job: Job<ExportJobData>): Promise<void> {
-    const { jobId } = job.data;
-    this.logger.log(`Starting export job: ${jobId}`);
+    const { jobId, instanceUrl, token, username } = job.data;
+    this.logger.log(
+      `Starting export job ${jobId} for @${username}@${instanceUrl}`,
+    );
 
-    // Create temp directory if not exists
     const tempDir = path.resolve(process.cwd(), 'data', 'temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -79,10 +83,13 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
       await this.databaseService.updateJobStatus(jobId, 'processing');
 
       // 2. Build folder map
-      const folderPathMap = await this.misskeyService.buildFolderPathMap();
+      const folderPathMap = await this.misskeyService.buildFolderPathMap(
+        instanceUrl,
+        token,
+      );
 
       // 3. Get all files
-      const files = await this.misskeyService.getFiles();
+      const files = await this.misskeyService.getFiles(instanceUrl, token);
       const totalFiles = files.length;
       await this.databaseService.updateJobProgress(
         jobId,
@@ -97,12 +104,10 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
         zlib: { level: 9 }, // Maximum compression
       });
 
-      // Handle archive errors
       archive.on('error', (err: Error) => {
         throw err;
       });
 
-      // Pipe archive data to the file
       archive.pipe(output);
 
       // 5. Download and append files to ZIP sequentially
@@ -143,7 +148,6 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
         );
 
         if (!file.url) {
-          // File has no download URL, create a failed placeholder
           const errorMsg = `Skip file: ${file.name} (ID: ${file.id}) - No URL provided by Misskey instance.`;
           archive.append(errorMsg, { name: `${zipPath}.failed.txt` });
           this.logger.warn(errorMsg);
@@ -156,7 +160,7 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
             method: 'get',
             url: file.url,
             responseType: 'stream',
-            timeout: 60000, // 60 seconds timeout per file download
+            timeout: 60000,
           });
           const fileStream = response.data as Readable;
 
@@ -170,8 +174,9 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
           });
         } catch (err: unknown) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          this.logger.warn(`Failed to archive file "${file.name}": ${errMsg}`);
-          // Add a .failed.txt file inside the zip for transparency
+          this.logger.warn(
+            `Failed to archive file "${file.name}" from ${file.url}: ${errMsg}`,
+          );
           const failContent = `Download failed for file: ${file.name}\nURL: ${file.url}\nError: ${errMsg}`;
           archive.append(failContent, { name: `${zipPath}.failed.txt` });
         }
@@ -208,7 +213,6 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.error(
         `Error in export processor for job ${jobId}: ${errMsg}`,
-        err instanceof Error ? err.stack : undefined,
       );
       await this.databaseService.updateJobStatus(jobId, 'failed', {
         error: errMsg,
@@ -218,7 +222,6 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
       if (fs.existsSync(tempFilePath)) {
         try {
           fs.unlinkSync(tempFilePath);
-          this.logger.log(`Cleaned up local temp file: ${tempFilePath}`);
         } catch (unlinkErr) {
           this.logger.error(
             `Failed to delete temp file ${tempFilePath}:`,

@@ -44,18 +44,27 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async triggerExport(): Promise<JobRecord> {
-    // 1. Test connection to Misskey
-    const isConnected = await this.misskeyService.testConnection();
+  async triggerExport(
+    instanceUrl: string,
+    token: string,
+    username: string,
+  ): Promise<JobRecord> {
+    // 1. Test connection to Misskey with user token
+    const isConnected = await this.misskeyService.testConnection(
+      instanceUrl,
+      token,
+    );
     if (!isConnected) {
       throw new Error(
-        'Failed to connect to Misskey. Check your instance URL and API token.',
+        'Failed to connect to Misskey. Check your instance URL and Auth Token.',
       );
     }
 
-    // 2. Check for active (queued or processing) jobs for this user token
-    // (Since we have a single configured token in .env, we check active jobs globally)
-    const allJobs = await this.databaseService.getAllJobs();
+    // 2. Check active jobs for this specific user
+    const allJobs = await this.databaseService.getAllJobs(
+      instanceUrl,
+      username,
+    );
     const activeJobs = allJobs.filter(
       (job) =>
         job.status === 'queued' ||
@@ -64,7 +73,7 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
     );
     if (activeJobs.length >= 2) {
       throw new Error(
-        'Too many active jobs. A maximum of 2 concurrent exports is allowed.',
+        'Too many active jobs. A maximum of 2 concurrent exports is allowed per user.',
       );
     }
 
@@ -77,12 +86,20 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
       jobId,
       'queued',
       expiresAt,
+      instanceUrl,
+      username,
     );
 
-    // 4. Add job to BullMQ queue
-    await this.queue.add('generate-zip', { jobId }, { jobId, attempts: 1 });
+    // 4. Add job to BullMQ queue, passing user session data in job payload
+    await this.queue.add(
+      'generate-zip',
+      { jobId, instanceUrl, token, username },
+      { jobId, attempts: 1 },
+    );
 
-    this.logger.log(`Export job ${jobId} queued.`);
+    this.logger.log(
+      `Export job ${jobId} queued for @${username}@${instanceUrl}.`,
+    );
     return jobRecord;
   }
 
@@ -92,24 +109,18 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException(`Export job with ID ${id} not found.`);
     }
 
-    // Generate Pre-signed URL if job is finished successfully and not expired
     let downloadUrl: string | undefined;
     if (job.status === 'done' && job.zipKey) {
-      // Checked URL lifetime - 1 hour (3600 seconds)
       downloadUrl = await this.storageService.getPresignedUrl(job.zipKey, 3600);
 
-      // Handle download lifecycle & expiration extension rules
       const now = new Date();
       let updatedExpiresAt = new Date(job.expiresAt);
 
       if (!job.downloadedAt) {
-        // First download: Record downloadedAt and extend expiresAt by 7 days
         const firstDownloadAt = now.toISOString();
         const extendedExpires = new Date(
           now.getTime() + 7 * 24 * 60 * 60 * 1000,
         ); // +7 days
-
-        // Cap absolute lifetime at 30 days from creation
         const creationTime = new Date(job.createdAt);
         const maxExpiresLimit = new Date(
           creationTime.getTime() + 30 * 24 * 60 * 60 * 1000,
@@ -129,7 +140,6 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
         job.downloadedAt = firstDownloadAt;
         job.expiresAt = updatedExpiresAt.toISOString();
       } else {
-        // Subsequent downloads: Extend expiresAt by 7 days from now, up to a max of 30 days from creation
         const extendedExpires = new Date(
           now.getTime() + 7 * 24 * 60 * 60 * 1000,
         );
@@ -141,7 +151,6 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
         if (extendedExpires > maxExpiresLimit) {
           updatedExpiresAt = maxExpiresLimit;
         } else if (extendedExpires > updatedExpiresAt) {
-          // Only update if extension is further in the future than the current expiresAt
           updatedExpiresAt = extendedExpires;
         }
 
@@ -158,7 +167,10 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async getAllJobs(): Promise<JobRecord[]> {
-    return this.databaseService.getAllJobs();
+  async getAllJobs(
+    instanceUrl?: string,
+    username?: string,
+  ): Promise<JobRecord[]> {
+    return this.databaseService.getAllJobs(instanceUrl, username);
   }
 }

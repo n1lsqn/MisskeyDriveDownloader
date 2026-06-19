@@ -14,6 +14,8 @@ export interface JobRecord {
   downloadedAt: string | null;
   expiresAt: string;
   error: string | null;
+  instanceUrl: string | null;
+  username: string | null;
 }
 
 @Injectable()
@@ -81,21 +83,28 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           createdAt TEXT NOT NULL,
           downloadedAt TEXT,
           expiresAt TEXT NOT NULL,
-          error TEXT
+          error TEXT,
+          instanceUrl TEXT,
+          username TEXT
         )
       `;
 
       this.db.run(query, (err) => {
         if (err) {
-          reject(err);
-        } else {
-          resolve();
+          return reject(err);
         }
+        // Safely add columns to existing DB if they are missing
+        if (!this.db) return resolve();
+        this.db.run('ALTER TABLE jobs ADD COLUMN instanceUrl TEXT', () => {
+          if (!this.db) return resolve();
+          this.db.run('ALTER TABLE jobs ADD COLUMN username TEXT', () => {
+            resolve();
+          });
+        });
       });
     });
   }
 
-  // Execute database operations
   private run(query: string, params: unknown[] = []): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.db) return reject(new Error('Database not connected'));
@@ -126,18 +135,30 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  // Job operations
   async createJob(
     id: string,
     status: JobRecord['status'],
     expiresAt: string,
+    instanceUrl: string,
+    username: string,
   ): Promise<JobRecord> {
     const createdAt = new Date().toISOString();
     const query = `
-      INSERT INTO jobs (id, status, progress, totalFiles, currentFile, zipKey, createdAt, expiresAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO jobs (id, status, progress, totalFiles, currentFile, zipKey, createdAt, expiresAt, instanceUrl, username)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
-    const params = [id, status, 0, 0, null, null, createdAt, expiresAt];
+    const params = [
+      id,
+      status,
+      0,
+      0,
+      null,
+      null,
+      createdAt,
+      expiresAt,
+      instanceUrl,
+      username,
+    ];
     await this.run(query, params);
 
     return {
@@ -151,6 +172,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       downloadedAt: null,
       expiresAt,
       error: null,
+      instanceUrl,
+      username,
     };
   }
 
@@ -159,13 +182,19 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return this.get<JobRecord>(query, [id]);
   }
 
-  async getAllJobs(): Promise<JobRecord[]> {
+  async getAllJobs(
+    instanceUrl?: string,
+    username?: string,
+  ): Promise<JobRecord[]> {
+    if (instanceUrl && username) {
+      const query = `SELECT * FROM jobs WHERE instanceUrl = ? AND username = ? ORDER BY createdAt DESC`;
+      return this.all<JobRecord>(query, [instanceUrl, username]);
+    }
     const query = `SELECT * FROM jobs ORDER BY createdAt DESC`;
     return this.all<JobRecord>(query);
   }
 
   async getExpiredJobs(now: string): Promise<JobRecord[]> {
-    // Only get jobs that are done or failed or processing, and their expiresAt is past, and status is not yet 'expired'
     const query = `SELECT * FROM jobs WHERE expiresAt < ? AND status != 'expired'`;
     return this.all<JobRecord>(query, [now]);
   }

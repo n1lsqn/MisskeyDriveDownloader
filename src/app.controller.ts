@@ -1,15 +1,122 @@
-import { Controller, Get, Post, Param, Res, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Res,
+  Req,
+  Query,
+  Headers,
+  HttpStatus,
+} from '@nestjs/common';
 import { ExportService } from './export/export.service';
 import * as express from 'express';
+import { randomUUID } from 'crypto';
+import axios from 'axios';
 
 @Controller()
 export class AppController {
   constructor(private readonly exportService: ExportService) {}
 
-  @Post('api/exports')
-  async triggerExport(@Res() res: express.Response) {
+  @Get('api/auth/login')
+  login(
+    @Query('instanceUrl') instanceUrl: string,
+    @Req() req: express.Request,
+    @Res() res: express.Response,
+  ) {
+    if (!instanceUrl) {
+      return res
+        .status(HttpStatus.BAD_REQUEST)
+        .send('Missing instanceUrl query parameter.');
+    }
+
+    const sessionId = randomUUID();
+    const cleanInstanceUrl = instanceUrl.replace(/\/$/, '');
+
+    // Construct the callback URL pointing back to this API server
+    const host = req.headers.host || `localhost:${process.env.PORT || 3080}`;
+    const protocol =
+      req.secure || req.headers['x-forwarded-proto'] === 'https'
+        ? 'https'
+        : 'http';
+    const callbackUrl = encodeURIComponent(
+      `${protocol}://${host}/api/auth/callback?instanceUrl=${cleanInstanceUrl}`,
+    );
+
+    // Redirect to MiAuth login on the user's Misskey instance
+    const miauthUrl = `${cleanInstanceUrl}/miauth/${sessionId}?name=Misskey%20Drive%20Exporter&permission=read:drive&callback=${callbackUrl}`;
+
+    return res.redirect(miauthUrl);
+  }
+
+  @Get('api/auth/callback')
+  async authCallback(
+    @Query('instanceUrl') instanceUrl: string,
+    @Query('session') sessionId: string,
+    @Res() res: express.Response,
+  ) {
+    if (!instanceUrl || !sessionId) {
+      return res
+        .status(HttpStatus.BAD_REQUEST)
+        .send('Missing required parameters in callback.');
+    }
+
     try {
-      const job = await this.exportService.triggerExport();
+      const cleanInstanceUrl = instanceUrl.replace(/\/$/, '');
+      const checkUrl = `${cleanInstanceUrl}/api/miauth/${sessionId}/check`;
+
+      const checkResponse = await axios.post<{
+        ok: boolean;
+        token: string;
+        user: { username: string; name: string | null };
+      }>(
+        checkUrl,
+        {},
+        {
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
+
+      if (checkResponse.data && checkResponse.data.ok) {
+        const { token, user } = checkResponse.data;
+        const displayName = user.name || user.username;
+
+        // Redirect back to frontend dashboard with credentials in URL query parameters
+        return res.redirect(
+          `/?token=${encodeURIComponent(token)}&instanceUrl=${encodeURIComponent(cleanInstanceUrl)}&username=${encodeURIComponent(user.username)}&displayName=${encodeURIComponent(displayName)}`,
+        );
+      } else {
+        return res
+          .status(HttpStatus.BAD_REQUEST)
+          .send('Authentication check failed on Misskey.');
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return res
+        .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .send(`Authentication callback error: ${errMsg}`);
+    }
+  }
+
+  @Post('api/exports')
+  async triggerExport(
+    @Headers('x-misskey-token') token: string,
+    @Headers('x-misskey-instance') instanceUrl: string,
+    @Headers('x-misskey-username') username: string,
+    @Res() res: express.Response,
+  ) {
+    if (!token || !instanceUrl || !username) {
+      return res.status(HttpStatus.UNAUTHORIZED).json({
+        error: '認証情報が不足しています。ログインし直してください。',
+      });
+    }
+
+    try {
+      const job = await this.exportService.triggerExport(
+        instanceUrl,
+        token,
+        username,
+      );
       return res.status(HttpStatus.CREATED).json(job);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -18,8 +125,18 @@ export class AppController {
   }
 
   @Get('api/exports')
-  async listJobs() {
-    return this.exportService.getAllJobs();
+  async listJobs(
+    @Headers('x-misskey-instance') instanceUrl: string,
+    @Headers('x-misskey-username') username: string,
+    @Res() res: express.Response,
+  ) {
+    if (!instanceUrl || !username) {
+      return res
+        .status(HttpStatus.UNAUTHORIZED)
+        .json({ error: '認証情報がありません。' });
+    }
+    const jobs = await this.exportService.getAllJobs(instanceUrl, username);
+    return res.status(HttpStatus.OK).json(jobs);
   }
 
   @Get('api/exports/:id')
@@ -111,11 +228,6 @@ export class AppController {
       transition: transform 0.3s ease, box-shadow 0.3s ease;
     }
 
-    .dashboard-panel:hover {
-      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6), 
-                  0 0 50px rgba(123, 44, 191, 0.15);
-    }
-
     header {
       text-align: center;
       margin-bottom: 2.5rem;
@@ -138,17 +250,42 @@ export class AppController {
       font-weight: 300;
     }
 
-    /* Primary Action */
-    .action-section {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      margin-bottom: 3rem;
-      padding-bottom: 2.5rem;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    /* Auth Screen styling */
+    .auth-section {
+      text-align: center;
+      padding: 2rem 0;
     }
 
-    .btn-export {
+    .input-group {
+      margin: 1.5rem 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .input-field {
+      width: 100%;
+      max-width: 400px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 0.8rem 1.2rem;
+      color: white;
+      font-family: inherit;
+      font-size: 1rem;
+      outline: none;
+      text-align: center;
+      transition: border-color 0.3s;
+    }
+
+    .input-field:focus {
+      border-color: #9d4edd;
+      box-shadow: 0 0 10px rgba(157, 78, 221, 0.2);
+    }
+
+    /* Buttons */
+    .btn-export, .btn-login {
       background: linear-gradient(135deg, #9d4edd 0%, #7b2cbf 100%);
       color: white;
       border: none;
@@ -164,20 +301,64 @@ export class AppController {
       gap: 0.8rem;
     }
 
-    .btn-export:hover {
+    .btn-export:hover, .btn-login:hover {
       transform: translateY(-3px);
       box-shadow: 0 12px 30px rgba(157, 78, 221, 0.5);
     }
 
-    .btn-export:active {
-      transform: translateY(-1px);
+    .btn-logout {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-muted);
+      padding: 0.4rem 1rem;
+      font-size: 0.85rem;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .btn-logout:hover {
+      background: rgba(255, 0, 110, 0.15);
+      color: var(--danger-color);
+      border-color: rgba(255, 0, 110, 0.2);
     }
 
-    .btn-export:disabled {
-      background: #3e3a52;
-      box-shadow: none;
-      cursor: not-allowed;
-      opacity: 0.6;
+    /* User Profile section */
+    .user-profile {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.8rem 1.2rem;
+      border-radius: 16px;
+      margin-bottom: 2rem;
+    }
+
+    .user-info {
+      display: flex;
+      flex-direction: column;
+      text-align: left;
+    }
+
+    .user-display-name {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+
+    .user-instance-handle {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    /* Primary Action */
+    .action-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 3rem;
+      padding-bottom: 2.5rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     }
 
     /* Jobs Section */
@@ -339,7 +520,6 @@ export class AppController {
       100% { opacity: 0.7; }
     }
 
-    /* Alert Banner */
     .toast {
       position: fixed;
       bottom: 2rem;
@@ -370,22 +550,45 @@ export class AppController {
         <div class="subtitle">非同期一括ファイルバックアップシステム</div>
       </header>
 
-      <section class="action-section">
-        <button id="btnTriggerExport" class="btn-export" onclick="triggerExport()">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-          一括エクスポートを開始
-        </button>
-      </section>
-
-      <section class="jobs-section">
-        <h2>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-          エクスポート履歴
-        </h2>
-        <div id="jobsList" class="jobs-container">
-          <div class="empty-state">履歴を読み込んでいます...</div>
+      <!-- 1. AUTH SCREEN (shown if not logged in) -->
+      <div id="authScreen" class="auth-section" style="display: none;">
+        <p class="subtitle" style="margin-bottom: 1.5rem;">ご利用の Misskey インスタンスの URL を入力してログインしてください。</p>
+        <div class="input-group">
+          <input type="url" id="instanceInput" class="input-field" placeholder="https://misskey.io" value="https://misskey.io">
         </div>
-      </section>
+        <button onclick="loginWithMisskey()" class="btn-login">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path><polyline points="10 17 15 12 10 7"></polyline><line x1="15" y1="12" x2="3" y2="12"></line></svg>
+          Misskeyでログイン (MiAuth)
+        </button>
+      </div>
+
+      <!-- 2. DASHBOARD SCREEN (shown if logged in) -->
+      <div id="dashboardScreen" style="display: none;">
+        <div class="user-profile">
+          <div class="user-info">
+            <span id="userDisplayName" class="user-display-name">ユーザー名</span>
+            <span id="userHandle" class="user-instance-handle">@username@instance.url</span>
+          </div>
+          <button onclick="logout()" class="btn-logout">ログアウト</button>
+        </div>
+
+        <section class="action-section">
+          <button id="btnTriggerExport" class="btn-export" onclick="triggerExport()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            一括エクスポートを開始
+          </button>
+        </section>
+
+        <section class="jobs-section">
+          <h2>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            あなたの一括バックアップ履歴
+          </h2>
+          <div id="jobsList" class="jobs-container">
+            <div class="empty-state">履歴を取得しています...</div>
+          </div>
+        </section>
+      </div>
     </main>
   </div>
 
@@ -393,6 +596,87 @@ export class AppController {
 
   <script>
     let activePollInterval = null;
+
+    // Handle authentication redirect variables
+    function checkAuthParams() {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('token');
+      const instanceUrl = params.get('instanceUrl');
+      const username = params.get('username');
+      const displayName = params.get('displayName');
+
+      if (token && instanceUrl && username) {
+        localStorage.setItem('token', token);
+        localStorage.setItem('instanceUrl', instanceUrl);
+        localStorage.setItem('username', username);
+        localStorage.setItem('displayName', displayName || username);
+
+        // Clean up URL parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+
+    function getAuthHeaders() {
+      return {
+        'x-misskey-token': localStorage.getItem('token') || '',
+        'x-misskey-instance': localStorage.getItem('instanceUrl') || '',
+        'x-misskey-username': localStorage.getItem('username') || '',
+        'Content-Type': 'application/json'
+      };
+    }
+
+    function isUserLoggedIn() {
+      return !!(localStorage.getItem('token') && localStorage.getItem('instanceUrl'));
+    }
+
+    function updateView() {
+      const authScreen = document.getElementById('authScreen');
+      const dashboardScreen = document.getElementById('dashboardScreen');
+
+      if (isUserLoggedIn()) {
+        authScreen.style.display = 'none';
+        dashboardScreen.style.display = 'block';
+
+        const displayName = localStorage.getItem('displayName');
+        const username = localStorage.getItem('username');
+        const instanceUrl = localStorage.getItem('instanceUrl');
+        const host = instanceUrl.replace(/^https?:\\/\\//, '');
+
+        document.getElementById('userDisplayName').textContent = displayName;
+        document.getElementById('userHandle').textContent = '@' + username + '@' + host;
+
+        fetchJobs();
+      } else {
+        authScreen.style.display = 'block';
+        dashboardScreen.style.display = 'none';
+      }
+    }
+
+    function loginWithMisskey() {
+      let instance = document.getElementById('instanceInput').value.trim();
+      if (!instance) {
+        showToast('インスタンスURLを入力してください。', true);
+        return;
+      }
+      if (!instance.startsWith('http://') && !instance.startsWith('https://')) {
+        instance = 'https://' + instance;
+      }
+
+      window.location.href = '/api/auth/login?instanceUrl=' + encodeURIComponent(instance);
+    }
+
+    function logout() {
+      localStorage.removeItem('token');
+      localStorage.removeItem('instanceUrl');
+      localStorage.removeItem('username');
+      localStorage.removeItem('displayName');
+      if (activePollInterval) {
+        clearInterval(activePollInterval);
+        activePollInterval = null;
+      }
+      updateView();
+      showToast('ログアウトしました。');
+    }
 
     async function showToast(message, isError = false) {
       const toast = document.getElementById('toast');
@@ -413,7 +697,10 @@ export class AppController {
       const btn = document.getElementById('btnTriggerExport');
       btn.disabled = true;
       try {
-        const res = await fetch('/api/exports', { method: 'POST' });
+        const res = await fetch('/api/exports', {
+          method: 'POST',
+          headers: getAuthHeaders()
+        });
         const data = await res.json();
         
         if (data.error) {
@@ -430,12 +717,18 @@ export class AppController {
     }
 
     async function fetchJobs() {
+      if (!isUserLoggedIn()) return;
       try {
-        const res = await fetch('/api/exports');
+        const res = await fetch('/api/exports', {
+          headers: getAuthHeaders()
+        });
+        if (res.status === 401) {
+          logout();
+          return;
+        }
         const jobs = await res.json();
         renderJobs(jobs);
 
-        // If there are any active running jobs (queued, processing, uploading), start polling
         const hasActiveJobs = jobs.some(j => ['queued', 'processing', 'uploading'].includes(j.status));
         if (hasActiveJobs && !activePollInterval) {
           activePollInterval = setInterval(fetchJobs, 2000);
@@ -466,16 +759,10 @@ export class AppController {
       return labels[status] || status;
     }
 
-    function downloadJob(jobId) {
-      window.open(\`/api/exports/\${jobId}/download\`, '_blank');
-      // Briefly trigger reload to show updated downloadedAt / expiresAt
-      setTimeout(fetchJobs, 1000);
-    }
-
     function renderJobs(jobs) {
       const container = document.getElementById('jobsList');
       if (jobs.length === 0) {
-        container.innerHTML = '<div class="empty-state">履歴はありません。</div>';
+        container.innerHTML = '<div class="empty-state">実行履歴はありません。</div>';
         return;
       }
 
@@ -533,8 +820,10 @@ export class AppController {
       }).join('');
     }
 
-    // Initial load
-    fetchJobs();
+    // App Initialization
+    checkAuthParams();
+    updateView();
+
     // Poll list in background every 10 seconds generally
     setInterval(fetchJobs, 10000);
   </script>
