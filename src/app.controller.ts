@@ -44,7 +44,7 @@ export class AppController {
     );
 
     // Redirect to MiAuth login on the user's Misskey instance
-    const miauthUrl = `${cleanInstanceUrl}/miauth/${sessionId}?name=Misskey%20Drive%20Exporter&permission=read:drive&callback=${callbackUrl}`;
+    const miauthUrl = `${cleanInstanceUrl}/miauth/${sessionId}?name=Misskey%20Drive%20Exporter&permission=read:drive,read:account&callback=${callbackUrl}`;
 
     return res.redirect(miauthUrl);
   }
