@@ -23,14 +23,14 @@ export class CleanupService implements OnModuleInit, OnModuleDestroy {
       void this.runCleanup();
     }, 10000);
 
-    // Run cleanup every 6 hours (6 * 60 * 60 * 1000 ms)
+    // Run cleanup every 1 hour (1 * 60 * 60 * 1000 ms)
     this.intervalId = setInterval(
       () => {
         void this.runCleanup();
       },
-      6 * 60 * 60 * 1000,
+      1 * 60 * 60 * 1000,
     );
-    this.logger.log('Cleanup Cron Service initialized (runs every 6 hours).');
+    this.logger.log('Cleanup Cron Service initialized (runs every 1 hour).');
   }
 
   onModuleDestroy() {

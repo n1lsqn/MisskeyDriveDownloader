@@ -79,9 +79,7 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
 
     // 3. Create job ID and DB entry (expires in 3 days initially)
     const jobId = randomUUID();
-    const expiresAt = new Date(
-      Date.now() + 3 * 24 * 60 * 60 * 1000,
-    ).toISOString(); // +3 days
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // +24 hours
     const jobRecord = await this.databaseService.createJob(
       jobId,
       'queued',
@@ -114,23 +112,10 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
       downloadUrl = await this.storageService.getPresignedUrl(job.zipKey, 3600);
 
       const now = new Date();
-      let updatedExpiresAt = new Date(job.expiresAt);
 
       if (!job.downloadedAt) {
         const firstDownloadAt = now.toISOString();
-        const extendedExpires = new Date(
-          now.getTime() + 7 * 24 * 60 * 60 * 1000,
-        ); // +7 days
-        const creationTime = new Date(job.createdAt);
-        const maxExpiresLimit = new Date(
-          creationTime.getTime() + 30 * 24 * 60 * 60 * 1000,
-        ); // +30 days max
-
-        if (extendedExpires > maxExpiresLimit) {
-          updatedExpiresAt = maxExpiresLimit;
-        } else {
-          updatedExpiresAt = extendedExpires;
-        }
+        const updatedExpiresAt = new Date(now.getTime() + 2 * 60 * 60 * 1000); // 2 hours from now
 
         await this.databaseService.updateJobStatus(id, 'done', {
           downloadedAt: firstDownloadAt,
@@ -138,25 +123,6 @@ export class ExportService implements OnModuleInit, OnModuleDestroy {
         });
 
         job.downloadedAt = firstDownloadAt;
-        job.expiresAt = updatedExpiresAt.toISOString();
-      } else {
-        const extendedExpires = new Date(
-          now.getTime() + 7 * 24 * 60 * 60 * 1000,
-        );
-        const creationTime = new Date(job.createdAt);
-        const maxExpiresLimit = new Date(
-          creationTime.getTime() + 30 * 24 * 60 * 60 * 1000,
-        );
-
-        if (extendedExpires > maxExpiresLimit) {
-          updatedExpiresAt = maxExpiresLimit;
-        } else if (extendedExpires > updatedExpiresAt) {
-          updatedExpiresAt = extendedExpires;
-        }
-
-        await this.databaseService.updateJobStatus(id, 'done', {
-          expiresAt: updatedExpiresAt.toISOString(),
-        });
         job.expiresAt = updatedExpiresAt.toISOString();
       }
     }
