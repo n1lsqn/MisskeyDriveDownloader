@@ -11,12 +11,7 @@ import { MisskeyService } from '../misskey/misskey.service';
 import { StorageService } from '../storage/storage.service';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as _archiver from 'archiver';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const archiver = require('archiver') as (
-  format: string,
-  options?: _archiver.ArchiverOptions,
-) => _archiver.Archiver;
+import * as archiver from 'archiver';
 import axios from 'axios';
 import { Readable } from 'stream';
 
@@ -101,7 +96,7 @@ export class ExportProcessor implements OnModuleInit, OnModuleDestroy {
 
       // 4. Initialize Archiver
       const output = fs.createWriteStream(tempFilePath);
-      const archive = archiver('zip', {
+      const archive = new archiver.ZipArchive({
         zlib: { level: 9 }, // Maximum compression
       });
 
